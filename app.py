@@ -15,6 +15,8 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.shared import Pt
 import pandas as pd
+from docx.oxml.ns import nsdecls
+from docx.oxml import parse_xml
 
 st.set_page_config(
 page_title="Student Group Generator",
@@ -24,9 +26,9 @@ layout="wide"
 
 st.title("📋 Student Group Generator")
 st.write(
-"Hi Dad! This website will randomise students into groups and generate a new Word document.\n\n" 
-"Please only upload 1 Word document at a time.\n"
-"The document should contain a table with student information, including their name, student number, and image."
+    "Hi Dad! This website will group students and generate a new Word document.\n\n" 
+    "Please only upload 1 Word document at a time.\n"
+    "The document should contain a table with student information, including their name, student number, and image."
 )
 
 uploaded_doc = st.file_uploader(
@@ -136,6 +138,25 @@ except Exception as e:
 finally:
     os.remove(input_path)
 
+st.write(
+    "Please select the checkboxes for features to be included in the output document"
+)
+
+
+include_studentno = st.checkbox("Include Student Numbers", value=True)
+include_groupno = st.checkbox("Include Group Numbers", value=True)
+include_borders = st.checkbox("Include Borders", value=True)
+
+def set_cell_properties(cell, border_color="000000"):
+    borders_xml = f'''
+    <w:tcBorders {nsdecls("w")}>
+        <w:top w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>
+        <w:left w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>
+        <w:bottom w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>
+        <w:right w:val="single" w:sz="4" w:space="0" w:color="{border_color}"/>
+    </w:tcBorders>
+    '''
+    cell._tc.get_or_add_tcPr().append(parse_xml(borders_xml))
 
 def create_document_with_groups(groups, header_text, original_cols):
     
@@ -154,7 +175,7 @@ def create_document_with_groups(groups, header_text, original_cols):
             head = output_doc.add_paragraph()
             run = head.add_run(header_text)
             run.font.name = "Verdana (Body)"
-            run.font.size = Pt(12)
+            run.font.size = Pt(11)
             run.bold = True
 
             for idx, group in enumerate(groups, start=1):
@@ -162,10 +183,11 @@ def create_document_with_groups(groups, header_text, original_cols):
                 # sort group by student name alphabetically
                 group.sort(key=lambda x: x["name"])
 
-                output_doc.add_heading(
-                    f"Group {idx}",
-                    level=2
-                )
+                if include_groupno:
+                    output_doc.add_heading(
+                        f"Group {idx}",
+                        level=3
+                    )
 
                 rows_needed = math.ceil(
                     len(group) / original_cols
@@ -199,7 +221,7 @@ def create_document_with_groups(groups, header_text, original_cols):
                             run = p.add_run() 
                             run.add_picture(
                                 student["image_path"], 
-                                width=Inches(0.9))
+                                width=Inches(0.75))
                         
                         # Add name 
                         name_para = cell.add_paragraph()
@@ -207,17 +229,19 @@ def create_document_with_groups(groups, header_text, original_cols):
                         run = name_para.add_run(
                             student["name"])
                         run.font.name = "Calibri"
-                        run.font.size = Pt(11)
+                        run.font.size = Pt(10)
 
                         # Add student number 
-                        num_para = cell.add_paragraph()
-                        num_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                        run = num_para.add_run(
-                            student["student_number"])
-                        run.font.name = "Calibri"
-                        run.font.size = Pt(11)
+                        if include_studentno: 
+                            num_para = cell.add_paragraph()
+                            num_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                            run = num_para.add_run(
+                                student["student_number"])
+                            run.font.name = "Calibri"
+                            run.font.size = Pt(10)
 
                         student_idx += 1
+                        set_cell_properties(cell, border_color="000000" if include_borders else "FFFFFF")
 
             original_name = os.path.splitext(uploaded_doc.name)[0]
 
@@ -226,7 +250,6 @@ def create_document_with_groups(groups, header_text, original_cols):
             output_doc.save(output_path)
 
             return output_path
-
 
 # Create tabs for random groupings and fixed groupings
 tab1, tab2 = st.tabs(["Fixed Groupings", "Random Groupings"])
