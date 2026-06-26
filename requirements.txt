@@ -2,3 +2,4 @@ streamlit
 python-docx
 Pillow
 lxml
+pandas

@@ -14,6 +14,7 @@ from lxml import etree
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.shared import Pt
+import pandas as pd
 
 st.set_page_config(
 page_title="Student Group Generator",
@@ -29,138 +30,279 @@ st.write(
 )
 
 uploaded_doc = st.file_uploader(
-"Upload Word Document",
-type=["docx"]
-)
+    "Upload Word Document",
+    type=["docx"]
+    )
 
-group_size = st.number_input(
-"Number of students per group",
-min_value=1,
-value=4,
-step=1
-)
+if uploaded_doc is None:
+    st.error("Please upload a Word document.")
+    st.stop()
 
-if st.button("Generate Groups"):
+with tempfile.NamedTemporaryFile(
+    delete=False,
+    suffix=".docx"
+) as tmp:
 
+    tmp.write(uploaded_doc.read())
+    input_path = tmp.name
 
-    if uploaded_doc is None:
-        st.error("Please upload a Word document.")
+try:
+
+    doc = Document(input_path)
+
+    if len(doc.tables) == 0:
+        st.error("No tables found in document.")
         st.stop()
 
-    with tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".docx"
-    ) as tmp:
+    source_table = doc.tables[0]
+    original_cols = len(source_table.columns)
 
-        tmp.write(uploaded_doc.read())
-        input_path = tmp.name
 
-    try:
+    ## Extract class header
+    header_text = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            header_text.append(text)
+    header_text = "\n".join(header_text)
 
-        doc = Document(input_path)
+    ### Extract student information from the table
 
-        if len(doc.tables) == 0:
-            st.error("No tables found in document.")
-            st.stop()
+    students = []
+            
+    for row in source_table.rows:
+                for cell in row.cells:
+                    text = cell.text.strip()
 
-        source_table = doc.tables[0]
+                    if not text:
+                        continue
 
-        ## Extract class header
-        header_text = []
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            if text:
-                header_text.append(text)
-        header_text = "\n".join(header_text)
+                    lines = [x.strip() for x in text.split("\n") if x.strip()]
 
-        ### Extract student information from the table
+                    if len(lines) < 2:
+                        continue
 
-        students = []
-        
-        for row in source_table.rows:
-            for cell in row.cells:
-                text = cell.text.strip()
+                    student_number = lines[-1]
+                    student_name = " ".join(lines[:-1])
 
-                if not text:
-                    continue
+                    image_path = None
 
-                lines = [x.strip() for x in text.split("\n") if x.strip()]
+                    # Search for image relationship
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
 
-                if len(lines) < 2:
-                    continue
+                            xml = run._element.xml
 
-                student_number = lines[-1]
-                student_name = " ".join(lines[:-1])
+                            if "r:embed" not in xml:
+                                continue
 
-                image_path = None
+                            tree = etree.fromstring(run._element.xml.encode())
 
-                # Search for image relationship
-                for paragraph in cell.paragraphs:
-                    for run in paragraph.runs:
+                            embeds = tree.xpath(
+                                './/*[local-name()="blip"]'
+                            )
 
-                        xml = run._element.xml
+                            if len(embeds) == 0:
+                                continue
 
-                        if "r:embed" not in xml:
+                            rId = embeds[0].get(
+                                "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
+                            )
+
+                            image_part = doc.part.related_parts[rId]
+
+                            image_bytes = image_part.blob
+
+                            fd, image_path = tempfile.mkstemp(
+                                suffix=".jpg"
+                            )
+
+                            with os.fdopen(fd, "wb") as f:
+                                f.write(image_bytes)
+
+                            break
+
+                    students.append({
+                        "name": student_name,
+                        "student_number": student_number,
+                        "image_path": image_path
+                    })
+
+    total_students = len(students)
+
+except Exception as e:
+    st.error(str(e))
+
+finally:
+    os.remove(input_path)
+
+
+def create_document_with_groups(groups, header_text, original_cols):
+    
+            ### Generate output document
+
+            output_doc = Document()
+
+            # make narrow margins 
+            section = output_doc.sections[0]
+            section.top_margin = Inches(0.5)
+            section.bottom_margin = Inches(0.5)
+            section.left_margin = Inches(0.5)
+            section.right_margin = Inches(0.5)
+
+            # add initial class text
+            head = output_doc.add_paragraph()
+            run = head.add_run(header_text)
+            run.font.name = "Verdana (Body)"
+            run.font.size = Pt(12)
+            run.bold = True
+
+            for idx, group in enumerate(groups, start=1):
+
+                # sort group by student name alphabetically
+                group.sort(key=lambda x: x["name"])
+
+                output_doc.add_heading(
+                    f"Group {idx}",
+                    level=2
+                )
+
+                rows_needed = math.ceil(
+                    len(group) / original_cols
+                )
+
+                table = output_doc.add_table(
+                    rows=rows_needed,
+                    cols=original_cols, # or group_size
+                    #style="Table Grid"
+                )
+                table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+                student_idx = 0
+
+                for r in range(rows_needed):
+
+                    for c in range(original_cols):
+
+                        if student_idx >= len(group):
                             continue
 
-                        tree = etree.fromstring(run._element.xml.encode())
+                        student = group[student_idx]
 
-                        embeds = tree.xpath(
-                            './/*[local-name()="blip"]'
-                        )
+                        cell = table.cell(r, c) 
+                        cell.text = ""
 
-                        if len(embeds) == 0:
-                            continue
+                        # Add image 
+                        if student["image_path"]: 
+                            p = cell.paragraphs[0] 
+                            p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                            run = p.add_run() 
+                            run.add_picture(
+                                student["image_path"], 
+                                width=Inches(0.9))
+                        
+                        # Add name 
+                        name_para = cell.add_paragraph()
+                        name_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                        run = name_para.add_run(
+                            student["name"])
+                        run.font.name = "Calibri"
+                        run.font.size = Pt(11)
 
-                        rId = embeds[0].get(
-                            "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed"
-                        )
+                        # Add student number 
+                        num_para = cell.add_paragraph()
+                        num_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                        run = num_para.add_run(
+                            student["student_number"])
+                        run.font.name = "Calibri"
+                        run.font.size = Pt(11)
 
-                        image_part = doc.part.related_parts[rId]
+                        student_idx += 1
 
-                        image_bytes = image_part.blob
+            original_name = os.path.splitext(uploaded_doc.name)[0]
 
-                        fd, image_path = tempfile.mkstemp(
-                            suffix=".jpg"
-                        )
+            output_path = f"{original_name}_grouped.docx"
 
-                        with os.fdopen(fd, "wb") as f:
-                            f.write(image_bytes)
+            output_doc.save(output_path)
 
-                        break
+            return output_path
 
-                students.append({
-                    "name": student_name,
-                    "student_number": student_number,
-                    "image_path": image_path
-                })
 
-        total_students = len(students)
+# Create tabs for random groupings and fixed groupings
+tab1, tab2 = st.tabs(["Fixed Groupings", "Random Groupings"])
 
-        ### now group the students randomly according to the specified group size
+with tab2:
+    group_size = st.number_input(
+    "Number of students per group",
+    min_value=1,
+    value=4,
+    step=1
+    )
 
-        if total_students == 0:
-            st.error("No student entries detected.")
-            st.stop()
+    if st.button("Generate Random Groups"):
+            ### now group the students randomly according to the specified group size
 
-        random.shuffle(students)
+            if total_students == 0:
+                st.error("No student entries detected.")
+                st.stop()
 
-        num_groups = math.ceil(
-            total_students / group_size
-        )
+            random.shuffle(students)
 
-        groups = []
-
-        for i in range(num_groups):
-
-            start = i * group_size
-            end = start + group_size
-
-            groups.append(
-                students[start:end]
+            num_groups = math.ceil(
+                total_students / group_size
             )
 
-        ### Generate output document
+            groups = []
+
+            for i in range(num_groups):
+
+                start = i * group_size
+                end = start + group_size
+
+                groups.append(
+                    students[start:end]
+                )
+            
+            output_path = create_document_with_groups(groups, header_text, original_cols)
+            
+            with open(output_path, "rb") as file:
+
+                st.success(
+                    f"Generated {num_groups} groups."
+                )
+
+                st.download_button(
+                    label="Download Grouped Document",
+                    data=file,
+                    file_name=output_path,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+
+
+
+with tab1:
+    df = pd.DataFrame(
+        columns=["Team", "Name"],
+        data=[["", ""]]
+    )
+    st.write("### Paste your Excel data below:")
+    edited_df = st.data_editor(df, num_rows="dynamic")
+
+    if st.button("Generate Document"):
+        
+        if edited_df.equals(df):
+            st.error("Please enter some data.")
+            st.stop()
+
+        # Group by Team
+        groups = edited_df.groupby('Team')['Name'].apply(list).to_dict()
+
+        student_lookup = {student["name"]: student for student in students}
+
+        grouped_students = [
+            [student_lookup[name] for name in names if name in student_lookup]
+            for group_num, names in groups.items()
+        ]
 
         output_doc = Document()
 
@@ -178,88 +320,17 @@ if st.button("Generate Groups"):
         run.font.size = Pt(12)
         run.bold = True
 
-
-        original_cols = len(source_table.columns)
-
-        for idx, group in enumerate(groups, start=1):
-
-            output_doc.add_heading(
-                f"Group {idx}",
-                level=2
-            )
-
-            rows_needed = math.ceil(
-                len(group) / original_cols
-            )
-
-            table = output_doc.add_table(
-                rows=rows_needed,
-                cols=original_cols
-            )
-            table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-            student_idx = 0
-
-            for r in range(rows_needed):
-
-                for c in range(original_cols):
-
-                    if student_idx >= len(group):
-                        continue
-
-                    student = group[student_idx]
-
-                    cell = table.cell(r, c) 
-                    cell.text = ""
-
-                    # Add image 
-                    if student["image_path"]: 
-                        p = cell.paragraphs[0] 
-                        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                        run = p.add_run() 
-                        run.add_picture(
-                            student["image_path"], 
-                            width=Inches(0.9))
-                    
-                    # Add name 
-                    name_para = cell.add_paragraph()
-                    name_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                    run = name_para.add_run(
-                        student["name"])
-                    run.font.name = "Calibri"
-                    run.font.size = Pt(11)
-
-                    # Add student number 
-                    num_para = cell.add_paragraph()
-                    num_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                    run = num_para.add_run(
-                        student["student_number"])
-                    run.font.name = "Calibri"
-                    run.font.size = Pt(11)
-
-                    student_idx += 1
-
-        original_name = os.path.splitext(uploaded_doc.name)[0]
-
-        output_path = f"{original_name}_grouped.docx"
-
-        output_doc.save(output_path)
-
+        output_path = create_document_with_groups(grouped_students, header_text, original_cols)
+            
         with open(output_path, "rb") as file:
-
+                
             st.success(
-                f"Generated {num_groups} groups."
-            )
+                    f"File successfully generated."
+                )
 
             st.download_button(
-                label="Download Grouped Document",
-                data=file,
-                file_name=output_path,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
-
-    except Exception as e:
-        st.error(str(e))
-
-    finally:
-        os.remove(input_path)
+                    label="Download Grouped Document",
+                    data=file,
+                    file_name=output_path,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
