@@ -1,14 +1,12 @@
+import io
 import streamlit as st
 from docx import Document
-from copy import deepcopy
 import random
 import math
 import tempfile
 import os
 from docx.shared import Inches
-from PIL import Image
 import tempfile
-import zipfile
 import os
 from lxml import etree
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -224,22 +222,22 @@ def create_document_with_groups(groups, header_text, original_cols):
                                 width=Inches(0.75))
                         
                         # Add name 
-                        name_para = cell.add_paragraph()
-                        name_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                        run = name_para.add_run(
+                        #name_para = cell.add_paragraph()
+                        #name_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                        p.add_run().add_break()
+                        run = p.add_run(
                             student["name"])
                         run.font.name = "Calibri"
                         run.font.size = Pt(10)
 
+
                         # Add student number 
                         if include_studentno: 
-                            num_para = cell.add_paragraph()
-                            num_para.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                            run = num_para.add_run(
+                            p.add_run().add_break()
+                            run = p.add_run(
                                 student["student_number"])
                             run.font.name = "Calibri"
                             run.font.size = Pt(10)
-
                         student_idx += 1
                         set_cell_properties(cell, border_color="000000" if include_borders else "FFFFFF")
 
@@ -248,7 +246,6 @@ def create_document_with_groups(groups, header_text, original_cols):
             output_path = f"{original_name}_grouped.docx"
 
             output_doc.save(output_path)
-
             return output_path
 
 # Create tabs for random groupings and fixed groupings
@@ -350,6 +347,7 @@ with tab1:
             st.success(
                     f"File successfully generated."
                 )
+            
 
             st.download_button(
                     label="Download Grouped Document",
